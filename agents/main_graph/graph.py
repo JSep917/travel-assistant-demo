@@ -438,7 +438,7 @@ async def build_main_graph(checkpointer):
                     ],
                     "current_task": None,
                     "planning": _mark_status(
-                        planning=state["planning"],
+                        planning=state.get('planning'),
                         task_id=task["task_id"],
                         status="completed"
                         if task_result['status'] == "success"
