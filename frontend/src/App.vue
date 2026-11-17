@@ -402,10 +402,6 @@ function handleEvent(event, assistant) {
       status.value = event.message || "正在处理…";
       break;
 
-    case "task_timing":
-      status.value = "正在整理结果…";
-      break;
-
     case "interrupt":
       interrupt.value = event.payload || {};
       interruptAnswers.value = {};

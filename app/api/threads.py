@@ -130,10 +130,15 @@ async def thread_messages(
         if not content.strip():
             continue
 
+        name = getattr(message, "name", None)
+
+        if name == "clarify_cancel":
+            name = None
+
         items.append({
             "role": role,
             "content": content,
-            "name": getattr(message, "name", None),
+            "name": name,
         })
 
     return {"items": items}
