@@ -2,6 +2,14 @@
 
 基于 MCP + LangGraph 的多智能体出行助手，支持任务规划、多步工具调用、人工补充、分层记忆和流式对话。
 
+## 界面预览
+
+![对话界面](docs/screenshots/chat.png)
+
+## 工作流
+
+![LangGraph 工作流](docs/screenshots/graph.png)
+
 ## 功能
 
 - **多智能体任务编排**：把出行需求拆成地点查询、周边推荐、路线规划等任务，按依赖关系调度。
@@ -27,6 +35,7 @@ app/          FastAPI 入口和 API
 common/       状态、模型、工具函数
 services/     ChatService、数据库、缓存、记忆
 frontend/     Vue3 + Vite 前端
+docs/         截图与架构图
 test/         本地测试脚本
 ```
 
@@ -55,21 +64,18 @@ pip install -r requirements.txt
 ```text
 DEEPSEEK_API_KEY
 DASHSCOPE_API_KEY
+RERANK_BASE_URL
 AMAP_API_KEY
 POSTGRE_JSEP
 MILVUS_URI
 REDIS_URL
 ```
 
-`.env` 已被 `.gitignore` 忽略，不要提交真实密钥。
-
 ### 3. 启动后端
 
 ```powershell
 uvicorn app.main:app --reload --port 8000
 ```
-
-Windows 下必须带 `--reload`，否则 uvicorn 默认使用 ProactorEventLoop，psycopg 无法连接 PostgreSQL。
 
 - API 文档：http://127.0.0.1:8000/docs
 - 前端静态页：http://127.0.0.1:8000/app/
@@ -96,8 +102,6 @@ Vite 已把 `/api` 代理到 `http://127.0.0.1:8000`。
 cd frontend
 npm run build
 ```
-
-构建结果输出到 `frontend/dist/`，FastAPI 会自动托管 `/app/`。
 
 ## API
 
@@ -126,9 +130,3 @@ X-User-Id: test-user
 - PostgreSQL 保存会话、用户偏好和 LangGraph checkpoint。
 - Milvus 保存对话记忆，支持向量召回。
 - Redis 缓存 MCP 工具结果，减少重复调用。
-- 工具执行失败会返回失败结果，不会伪造地点或数据。
-
-## 注意事项
-
-- 本项目用于学习与演示，不提交 `.env`、密钥、`node_modules`、构建产物和本地缓存。
-- 地图和天气数据来自第三方服务，实际出行前请以官方信息为准。

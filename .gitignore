@@ -24,6 +24,6 @@ frontend/dist/
 frontend/.vite/
 
 # generated
-graph.png
-graph.mmd
+/graph.png
+/graph.mmd
 *.log

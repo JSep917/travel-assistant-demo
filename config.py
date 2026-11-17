@@ -8,11 +8,6 @@ class Settings:
     DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
     DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL")
 
-    # 中国气象局
-    CMA_API_KEY = os.getenv("CMA_API_KEY")
-    CMA_BASE_URL = os.getenv("CMA_BASE_URL")
-    CMA_USER_ID = os.getenv("CMA_USER_ID")
-
     # 高德地图
     AMAP_API_KEY = os.getenv("AMAP_API_KEY")
     AMAP_BASE_URL = os.getenv("AMAP_BASE_URL")
@@ -23,22 +18,12 @@ class Settings:
     DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
     DASHSCOPE_BASE_URL = os.getenv("DASHSCOPE_BASE_URL")
 
-    # Mineru文档解析
-    MINERU_TOKEN = os.getenv("MINERU_TOKEN")
-
     # Milvus
     MILVUS_URI = os.getenv("MILVUS_URI")
     MILVUS_TOKEN = os.getenv("MILVUS_TOKEN")
 
     # Redis
     REDIS_URL = os.getenv("REDIS_URL")
-
-    # 途牛
-    TUNIU_API_KEY = os.getenv("TUNIU_API_KEY")
-    TUNIU_BASE_URL = os.getenv("TUNIU_BASE_URL")
-
-    # 飞猪
-    FLYAI_API_KEY= os.getenv("FLYAI_API_KEY")
 
     # PostgreSOL
     POSTGRE_URI=os.getenv("POSTGRE_JSEP")
