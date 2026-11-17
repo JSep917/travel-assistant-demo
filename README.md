@@ -130,3 +130,4 @@ X-User-Id: test-user
 - PostgreSQL 保存会话、用户偏好和 LangGraph checkpoint。
 - Milvus 保存对话记忆，支持向量召回。
 - Redis 缓存 MCP 工具结果，减少重复调用。
+- 工具执行失败会返回失败结果，不会伪造地点或数据。
