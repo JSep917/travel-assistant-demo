@@ -16,6 +16,7 @@ const threads = ref([]);
 const activeThread = ref(null);
 const messages = ref([]);
 const messagesEl = ref(null);
+const inputEl = ref(null);
 const input = ref("");
 const currentPlan = ref(null);
 const planCollapsed = ref(false);
@@ -131,6 +132,21 @@ function togglePlanDrawer() {
 
 watch(status, scrollToBottom);
 watch(() => messages.value.length, scrollToBottom);
+
+function resizeInput() {
+  nextTick(() => {
+    const element = inputEl.value;
+
+    if (!element) {
+      return;
+    }
+
+    element.style.height = "auto";
+    element.style.height = `${Math.min(element.scrollHeight, 160)}px`;
+  });
+}
+
+watch(input, resizeInput);
 
 function renderMarkdown(content) {
   try {
@@ -826,9 +842,11 @@ onMounted(() => {
       <footer class="composer">
         <div class="composer-box">
           <textarea
+            ref="inputEl"
             v-model="input"
             rows="1"
             placeholder="想去哪儿？想吃什么？告诉我你的计划…"
+            @input="resizeInput"
             @keydown.enter.exact.prevent="sendMessage"
           ></textarea>
 

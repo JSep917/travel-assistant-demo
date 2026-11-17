@@ -880,9 +880,10 @@ button {
 
 .composer textarea {
   flex: 1;
-  max-height: 130px;
-  min-height: 26px;
+  max-height: 160px;
+  min-height: 42px;
   resize: none;
+  overflow-y: auto;
   border: 0;
   outline: 0;
   color: var(--ink);
