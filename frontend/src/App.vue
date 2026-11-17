@@ -149,12 +149,15 @@ function resizeInput() {
 watch(input, resizeInput);
 
 function renderMarkdown(content) {
+  // 温度区间里的 ~ 会被 Markdown 当成删除线语法，先转成全角波浪号
+  const text = String(content || "").replace(/~/g, "～");
+
   try {
     return DOMPurify.sanitize(
-      marked.parse(content || ""),
+      marked.parse(text),
     );
   } catch {
-    return DOMPurify.sanitize(content || "");
+    return DOMPurify.sanitize(text);
   }
 }
 
