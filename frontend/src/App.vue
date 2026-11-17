@@ -818,8 +818,19 @@ onMounted(() => {
             <div
               v-if="message.role === 'assistant'"
               class="bubble markdown"
-              v-html="renderMarkdown(message.content)"
-            ></div>
+            >
+              <div
+                v-if="!message.content && streaming"
+                class="typing inline"
+              >
+                <span></span><span></span><span></span>
+              </div>
+
+              <div
+                v-else
+                v-html="renderMarkdown(message.content)"
+              ></div>
+            </div>
 
             <div v-else class="bubble user-bubble">
               {{ message.content }}
@@ -832,9 +843,6 @@ onMounted(() => {
           <span>{{ status }}</span>
         </div>
 
-        <div v-if="streaming" class="typing">
-          <span></span><span></span><span></span>
-        </div>
       </section>
 
       <div v-if="error" class="error-bar">

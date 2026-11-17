@@ -70,7 +70,8 @@ button {
 
 .plan-sidebar.collapsed {
   align-items: center;
-  width: 62px;
+  justify-content: center;
+  width: 58px;
   padding: 14px 6px;
 }
 
@@ -804,13 +805,13 @@ button {
 
 .typing {
   display: flex;
-  width: 54px;
+  width: auto;
   gap: 4px;
-  margin: 4px auto 0;
-  padding: 8px 12px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: #fff;
+  margin: 0;
+  padding: 2px 1px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .typing span {
