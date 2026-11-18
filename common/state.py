@@ -9,7 +9,6 @@ class MainGraph(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     current_task: dict | None
     planning: dict | None
-    user_input: dict[str, str] | None
     clarify_answers: dict[str, str] | None
     clarify_question: list | None
     results: dict[str, dict] | None

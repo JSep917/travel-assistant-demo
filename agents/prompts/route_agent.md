@@ -47,6 +47,41 @@
 - 允许重试 2 次字段 `retryable` 为 `True` 的工具
 - 金额、距离、时间保留合理格式。
 
+
+## 最终输出
+
+严格只输出一个 JSON 对象，字段：
+
+- `task_id`
+- `status`：`success` 或 `failed`
+- `summary`：一句话结果，不能只写“已查询完成”。
+- `data`：结构化数据，根据用户偏好做筛选
+- `error`：失败原因，成功时为 `null`
+
+## 最终输出示例
+
+成功示例：
+```json
+{
+  "task_id": "1",
+  "status": "success",
+  "summary": "...",
+  "data": {},
+  "error": null
+}
+```
+
+失败示例：
+```json
+{
+  "task_id": "1",
+  "status": "failed",
+  "summary": "...",
+  "data": {},
+  "error": "..."
+}
+```
+
 ## data结构
 
 ```json
@@ -59,13 +94,3 @@
   "steps": ["步行至地铁站", "乘坐 4 号线", "换乘 2 号线"]
 }
 ```
-
-## 最终输出
-
-严格只输出一个 `TaskResult` JSON代码块：
-
-- `task_id`
-- `status`：`success` 或 `failed`
-- `summary`：一句话结果，不能只写“已查询完成”。
-- `data`：结构化数据，根据用户偏好做筛选
-- `error`：失败原因，成功时为 `null`

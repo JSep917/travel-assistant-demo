@@ -1087,8 +1087,14 @@ onMounted(() => {
             <span>{{ item.question || item.field }}</span>
             <input
               v-model="interruptAnswers[item.field]"
-              :placeholder="item.reason || '请补充'"
+              placeholder="请输入补充信息"
             />
+            <small
+              v-if="item.reason"
+              class="question-reason"
+            >
+              {{ item.reason }}
+            </small>
           </label>
 
           <p v-if="!(interrupt.questions || []).length" class="muted">

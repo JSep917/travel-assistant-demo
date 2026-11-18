@@ -24,6 +24,41 @@
 - 不要调用 `geo_agent` 或 `route_agent` 的工具。
 - 返回的每条 POI 尽量保留 `id`、`name`、`address`、`location`。
 
+
+## 最终输出
+
+严格只输出一个 JSON 对象，字段：
+
+- `task_id`
+- `status`：`success` 或 `failed`
+- `summary`：一句话结果，不能只写“已查询完成”。
+- `data`：结构化数据，根据用户偏好做筛选
+- `error`：失败原因，成功时为 `null`
+
+## 最终输出示例
+
+成功示例：
+```json
+{
+  "task_id": "1",
+  "status": "success",
+  "summary": "...",
+  "data": {},
+  "error": null
+}
+```
+
+失败示例：
+```json
+{
+  "task_id": "1",
+  "status": "failed",
+  "summary": "...",
+  "data": {},
+  "error": "..."
+}
+```
+
 ## data结构
 
 ```json
@@ -38,13 +73,3 @@
   ]
 }
 ```
-
-## 最终输出
-
-严格只输出一个 `TaskResult` JSON代码块：
-
-- `task_id`
-- `status`：`success` 或 `failed`
-- `summary`：一句话结果，不能只写“已查询完成”。
-- `data`：结构化数据，根据用户偏好做筛选
-- `error`：失败原因，成功时为 `null`

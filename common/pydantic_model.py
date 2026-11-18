@@ -1,10 +1,10 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 
 class TodoItem(BaseModel):
-    task_id: str = Field(min_length=1, description="任务唯一 ID")
+    task_id: str = Field(description="任务唯一 ID")
     content: str = Field(description="任务描述、目标")
     agent: Literal[
         "geo_agent",
@@ -21,6 +21,23 @@ class TodoItem(BaseModel):
         "completed",
         "failed",
     ] = Field(default="pending", description="任务状态")
+
+    @field_validator("task_id", mode="before")
+    @classmethod
+    def _stringify_task_id(cls, value):
+        return str(value) if value is not None else value
+
+    @field_validator("depends_on", mode="before")
+    @classmethod
+    def _stringify_depends_on(cls, value):
+        if value is None:
+            return []
+
+        if isinstance(value, (str, int)):
+            return [str(value)]
+
+        return [str(item) for item in value]
+
 
 class MissingInfo(BaseModel):
     field: str = Field(description="缺失信息字段")
@@ -52,6 +69,11 @@ class DispatchDecision(BaseModel):
     )
     reason: str = Field(default="", description="派发理由")
 
+    @field_validator("task_id", mode="before")
+    @classmethod
+    def _stringify_task_id(cls, value):
+        return str(value) if value is not None else value
+
 
 class TaskResult(BaseModel):
     task_id: str = Field(description="任务唯一 ID")
@@ -65,6 +87,12 @@ class TaskResult(BaseModel):
         default=None,
         description="失败原因",
     )
+
+    @field_validator("task_id", mode="before")
+    @classmethod
+    def _stringify_task_id(cls, value):
+        return str(value) if value is not None else value
+
 
 class MemoryCard(BaseModel):
     topic: str = Field(description="本轮主题")

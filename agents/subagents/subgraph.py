@@ -1,6 +1,7 @@
 from typing import Literal
 
-from jsonschema import ValidationError, validate
+from jsonschema import validate
+from pydantic import ValidationError
 from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
@@ -13,30 +14,6 @@ from common.pydantic_model import TaskResult
 from common.call_with_retry import call_with_retry
 from services.redis.tool_cache import get_tool_cache
 import json
-import re
-
-def _parse_task_result(text: str) -> TaskResult:
-    """JSON 解析"""
-    match = re.search(
-        r"```(?:json)?\s*(.*?)\s*```",
-        text,
-        re.S,
-    )
-
-    if match:
-        raw = match.group(1)
-    else:
-        start = text.find("{")
-        end = text.rfind("}")
-
-        if start == -1 or end == -1:
-            raise ValueError("没有找到 JSON")
-
-        raw = text[start:end + 1]
-    try:
-        return TaskResult.model_validate_json(raw)
-    except ValidationError:
-        raise
 
 def _tool_message(
     ok: bool,
@@ -115,8 +92,6 @@ def build_agent_subgraph(llm, state, tools: list, system_prompt: str) -> StateGr
                 except json.JSONDecodeError as e:
                     print(f"业务失败: {e}")
                     pass
-                except Exception:
-                    pass
 
                 if tool_cache:
                     print(f"工具 {name} 命中缓存")
@@ -190,7 +165,7 @@ def build_agent_subgraph(llm, state, tools: list, system_prompt: str) -> StateGr
         extract_retry = state.get("extract_retry") or 0
 
         try:
-            response: TaskResult = _parse_task_result(state['messages'][-1].content)
+            response: TaskResult = TaskResult.model_validate_json(state['messages'][-1].content)
 
             print(f"解析结果: {json.dumps(response.model_dump(exclude_none=True), ensure_ascii=False, indent=2)}")
 
@@ -203,6 +178,7 @@ def build_agent_subgraph(llm, state, tools: list, system_prompt: str) -> StateGr
             )
         except ValidationError as e:
             if extract_retry > 1:
+                # 超最大限重试 交给父图处理
                 raise
             return Command(
                 update={

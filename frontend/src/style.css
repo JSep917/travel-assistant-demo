@@ -54,7 +54,7 @@ button {
 }
 
 .app-shell.with-plan.plan-collapsed {
-  grid-template-columns: 264px minmax(0, 1fr) 58px;
+  grid-template-columns: 264px minmax(0, 1fr) 62px;
 }
 
 .plan-sidebar {
@@ -70,8 +70,7 @@ button {
 
 .plan-sidebar.collapsed {
   align-items: center;
-  justify-content: center;
-  width: 58px;
+  width: 62px;
   padding: 14px 6px;
 }
 
@@ -793,7 +792,7 @@ button {
   display: flex;
   align-items: center;
   gap: 9px;
-  max-width: 860px;
+  max-width: 780px;
   margin: 0 auto 12px;
   padding: 10px 13px;
   border: 1px solid rgba(31, 111, 99, 0.12);
@@ -1093,6 +1092,15 @@ button {
 .question input:focus {
   border-color: rgba(31, 111, 99, 0.5);
   box-shadow: 0 0 0 3px rgba(31, 111, 99, 0.08);
+}
+
+.question-reason {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .form-grid textarea {

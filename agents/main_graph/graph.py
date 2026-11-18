@@ -183,22 +183,17 @@ async def build_main_graph(checkpointer):
 
             print(f"计划: {json.dumps(response.model_dump(), ensure_ascii=False, indent=2)}\n")
 
-            questions = [
+            clarify_question = [
                 item.model_dump()
                 for item in response.missing
             ]
 
             return Command(
                 update={
-                    "user_input": None,
                     "need_memory": None,
                     "planning": response.model_dump(),
-                    "clarify_question": questions or None,
-                    "clarify_answers": (
-                        state.get('clarify_answers')
-                        if questions
-                        else None
-                    ),
+                    "clarify_question": clarify_question or None,
+                    "clarify_answers": state.get('clarify_answers') if clarify_question else None,
                 },
                 goto="clarify" if response.missing else "supervisor"
             )
@@ -214,22 +209,17 @@ async def build_main_graph(checkpointer):
             "allow_skip": True,
             "allow_cancel": True,
         })
-        action = (
-            user_input.get("action")
-            if isinstance(user_input, dict)
-            else ""
-        )
+        action = user_input.get('action') or 'confirm'
+
+        content = "，".join([
+            question.get('reason')
+            for question in questions
+        ])
 
         if action == "cancel":
             return Command(
                 update={
-                    "messages": [
-                        AIMessage(
-                            content="好的，已取消本次行程安排。",
-                            name="clarify_cancel",
-                        )
-                    ],
-                    "user_input": None,
+                    "messages": [AIMessage(content=content, name="clarify_cancel")],
                     "clarify_answers": None,
                     "clarify_question": None,
                     "planning": None,
@@ -239,18 +229,11 @@ async def build_main_graph(checkpointer):
 
         answers = {
             **(state.get("clarify_answers") or {}),
-            **(
-                user_input
-                if isinstance(user_input, dict)
-                else {}
-            ),
+            **user_input
         }
 
         return Command(
-            update={
-                "user_input": user_input,
-                "clarify_answers": answers,
-            },
+            update={"clarify_answers": answers},
             goto="planning",
         )
 
@@ -480,8 +463,8 @@ async def build_main_graph(checkpointer):
             ]
             try:
                 response = await call_with_retry(lambda: llm.ainvoke(messages))
-            except Exception as e:
-                print(f"回答失败: {e}")
+            except Exception:
+                response = AIMessage(content="整理回答失败，请稍后重试...")
 
             return Command(
                 update={
@@ -518,8 +501,8 @@ async def build_main_graph(checkpointer):
             ]
             try:
                 response = await call_with_retry(lambda: llm.ainvoke(messages))
-            except Exception as e:
-                print(f"整理回答失败: {e}")
+            except Exception:
+                response = AIMessage(content="整理回答失败，请稍后重试...")
 
             return Command(
                 update={
