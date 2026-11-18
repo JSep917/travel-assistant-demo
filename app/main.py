@@ -33,6 +33,22 @@ async def lifespan(app: FastAPI):
     try:
         await pool.open()
 
+        schema_file = (
+            Path(__file__).resolve().parent.parent
+            / "services"
+            / "db"
+            / "001.sql"
+        )
+        statements = [
+            statement.strip()
+            for statement in schema_file.read_text(encoding="utf-8").split(";")
+            if statement.strip()
+        ]
+
+        async with pool.connection() as conn:
+            for statement in statements:
+                await conn.execute(statement)
+
         async with AsyncPostgresSaver.from_conn_string(
             settings.POSTGRE_URI
         ) as checkpointer:
