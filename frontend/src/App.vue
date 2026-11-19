@@ -3,6 +3,7 @@ import {
   computed,
   nextTick,
   onMounted,
+  onUnmounted,
   reactive,
   ref,
   watch,
@@ -14,11 +15,15 @@ const USER_ID = "test-user";
 
 const threads = ref([]);
 const activeThread = ref(null);
+const threadMenuId = ref(null);
+const userMenuOpen = ref(false);
 const messages = ref([]);
 const messagesEl = ref(null);
+const stickToBottom = ref(true);
 const inputEl = ref(null);
 const input = ref("");
 const currentPlan = ref(null);
+const traces = ref({});
 const planCollapsed = ref(false);
 const planDrawerOpen = ref(false);
 const streaming = ref(false);
@@ -51,6 +56,10 @@ const empty = computed(
   () => messages.value.length === 0 && !streaming.value,
 );
 
+const showJump = computed(
+  () => !stickToBottom.value && messages.value.length > 0,
+);
+
 const canSubmitInterrupt = computed(() =>
   Object.values(interruptAnswers.value).some(
     (value) => value && value.trim(),
@@ -64,6 +73,60 @@ const activeTitle = computed(() => {
   return item?.title || "新的旅程";
 });
 
+const hasPlanTasks = computed(
+  () => Boolean((currentPlan.value?.tasks || []).length),
+);
+
+const planStats = computed(() => {
+  const stats = {
+    total: 0,
+    pending: 0,
+    running: 0,
+    success: 0,
+    failed: 0,
+  };
+
+  for (const task of currentPlan.value?.tasks || []) {
+    const state = taskState(task);
+
+    stats.total += 1;
+    stats[state] += 1;
+  }
+
+  return stats;
+});
+
+function taskState(task) {
+  const trace = traces.value[String(task.task_id)];
+
+  if (trace?.phase === "start") {
+    return "running";
+  }
+
+  if (trace?.phase === "success") {
+    return "success";
+  }
+
+  if (trace?.phase === "failed") {
+    return "failed";
+  }
+
+  return {
+    completed: "success",
+    failed: "failed",
+    in_progress: "running",
+  }[task.status] || "pending";
+}
+
+function taskStateLabel(state) {
+  return {
+    pending: "待执行",
+    running: "执行中",
+    success: "完成",
+    failed: "失败",
+  }[state] || "待执行";
+}
+
 const suggestions = [
   "帮我安排长沙一日游，主要去岳麓山、橘子洲、五一广场",
   "五一广场附近有什么不辣的餐厅？",
@@ -71,18 +134,131 @@ const suggestions = [
   "最近几天长沙天气怎么样？",
 ];
 
-function scrollToBottom() {
+function scrollToBottom(force = false) {
   nextTick(() => {
     const element = messagesEl.value;
 
-    if (element) {
-      element.scrollTop = element.scrollHeight;
+    if (!element || (!force && !stickToBottom.value)) {
+      return;
     }
+
+    element.scrollTop = element.scrollHeight;
   });
+}
+
+function onMessagesScroll() {
+  const element = messagesEl.value;
+
+  if (!element) {
+    return;
+  }
+
+  const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+  stickToBottom.value = distance < 80;
+}
+
+function jumpToBottom() {
+  stickToBottom.value = true;
+  scrollToBottom(true);
 }
 
 function planKey(threadId) {
   return `travel-plan:${threadId}`;
+}
+
+function traceKey(threadId) {
+  return `travel-trace:${threadId}`;
+}
+
+function cancelKey(threadId) {
+  return `travel-cancel:${threadId}`;
+}
+
+function saveCancelNotice(threadId, content) {
+  if (!threadId || !content) {
+    return;
+  }
+
+  try {
+    localStorage.setItem(cancelKey(threadId), content);
+  } catch {
+    // ignore
+  }
+}
+
+function loadCancelNotice(threadId) {
+  if (!threadId) {
+    return "";
+  }
+
+  try {
+    return localStorage.getItem(cancelKey(threadId)) || "";
+  } catch {
+    return "";
+  }
+}
+
+function clearCancelNotice(threadId) {
+  if (!threadId) {
+    return;
+  }
+
+  try {
+    localStorage.removeItem(cancelKey(threadId));
+  } catch {
+    // ignore
+  }
+}
+
+function saveTrace(threadId, value) {
+  if (!threadId) {
+    return;
+  }
+
+  try {
+    localStorage.setItem(traceKey(threadId), JSON.stringify(value));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function loadTrace(threadId) {
+  if (!threadId) {
+    return {};
+  }
+
+  try {
+    const raw = localStorage.getItem(traceKey(threadId));
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function clearTrace(threadId) {
+  traces.value = {};
+
+  if (!threadId) {
+    return;
+  }
+
+  try {
+    localStorage.removeItem(traceKey(threadId));
+  } catch {
+    // ignore
+  }
+}
+
+function formatDuration(duration) {
+  if (duration == null) {
+    return "";
+  }
+
+  if (duration < 1000) {
+    return `${duration}ms`;
+  }
+
+  return `${(duration / 1000).toFixed(1)}s`;
 }
 
 function savePlan(threadId, plan) {
@@ -130,8 +306,8 @@ function togglePlanDrawer() {
   planDrawerOpen.value = !planDrawerOpen.value;
 }
 
-watch(status, scrollToBottom);
-watch(() => messages.value.length, scrollToBottom);
+watch(status, () => scrollToBottom());
+watch(() => messages.value.length, () => scrollToBottom());
 
 function resizeInput() {
   nextTick(() => {
@@ -142,7 +318,7 @@ function resizeInput() {
     }
 
     element.style.height = "auto";
-    element.style.height = `${Math.min(element.scrollHeight, 160)}px`;
+    element.style.height = `${Math.min(element.scrollHeight, 190)}px`;
   });
 }
 
@@ -196,7 +372,23 @@ async function refreshThreads() {
   }
 }
 
+function toggleThreadMenu(threadId) {
+  threadMenuId.value = threadMenuId.value === threadId ? null : threadId;
+}
+
+function closeThreadMenu() {
+  threadMenuId.value = null;
+  userMenuOpen.value = false;
+}
+
+function toggleUserMenu() {
+  userMenuOpen.value = !userMenuOpen.value;
+  threadMenuId.value = null;
+}
+
 async function openThread(threadId) {
+  threadMenuId.value = null;
+
   if (streaming.value) {
     error.value = "正在生成回答，请先停止生成或等待完成后再切换会话。";
     return;
@@ -216,10 +408,24 @@ async function openThread(threadId) {
       name: item.name,
     }));
 
+    const cancelNotice = loadCancelNotice(threadId);
+
+    if (
+      cancelNotice
+      && !messages.value.some((item) => item.content === cancelNotice)
+    ) {
+      messages.value.push({
+        role: "assistant",
+        content: cancelNotice,
+        name: "assistant",
+      });
+    }
+
     currentPlan.value = loadPlan(threadId);
+    traces.value = loadTrace(threadId);
     planCollapsed.value = false;
     planDrawerOpen.value = Boolean(currentPlan.value);
-    scrollToBottom();
+    scrollToBottom(true);
   } catch (exc) {
     error.value = exc.message;
   }
@@ -234,6 +440,7 @@ function newChat() {
   activeThread.value = null;
   messages.value = [];
   currentPlan.value = null;
+  traces.value = {};
   planCollapsed.value = false;
   planDrawerOpen.value = false;
   input.value = "";
@@ -242,6 +449,7 @@ function newChat() {
 }
 
 function renameThread(thread) {
+  threadMenuId.value = null;
   renameThreadId.value = thread.thread_id;
   renameTitle.value = thread.title || "新会话";
   renameOpen.value = true;
@@ -275,6 +483,7 @@ async function saveRename() {
 }
 
 function deleteThread(thread) {
+  threadMenuId.value = null;
   deleteTarget.value = thread;
   deleteOpen.value = true;
 }
@@ -298,6 +507,8 @@ async function confirmDelete() {
 
     try {
       localStorage.removeItem(planKey(target.thread_id));
+      localStorage.removeItem(traceKey(target.thread_id));
+      localStorage.removeItem(cancelKey(target.thread_id));
     } catch {
       // ignore
     }
@@ -399,11 +610,27 @@ function handleEvent(event, assistant) {
       status.value = "正在拆解行程…";
 
       if (event.planning) {
-        currentPlan.value = event.planning;
-        planCollapsed.value = false;
-        planDrawerOpen.value = false;
-        savePlan(activeThread.value, event.planning);
+        const tasks = event.planning.tasks || [];
+
+        if (tasks.length) {
+          currentPlan.value = event.planning;
+          planCollapsed.value = false;
+          planDrawerOpen.value = false;
+          savePlan(activeThread.value, event.planning);
+        } else {
+          currentPlan.value = null;
+
+          try {
+            localStorage.removeItem(planKey(activeThread.value));
+          } catch {
+            // ignore
+          }
+        }
       }
+      break;
+
+    case "summary":
+      status.value = event.message || "正在压缩历史…";
       break;
 
     case "planning":
@@ -413,6 +640,22 @@ function handleEvent(event, assistant) {
     case "router":
       status.value = event.message || "正在判断…";
       break;
+
+    case "trace": {
+      const taskId = String(event.task_id ?? "");
+
+      if (taskId) {
+        traces.value = {
+          ...traces.value,
+          [taskId]: {
+            ...(traces.value[taskId] || {}),
+            ...event,
+          },
+        };
+        saveTrace(activeThread.value, traces.value);
+      }
+      break;
+    }
 
     case "subagent":
     case "recall":
@@ -442,6 +685,7 @@ function handleEvent(event, assistant) {
 
       if (event.cancelled) {
         currentPlan.value = null;
+        clearTrace(activeThread.value);
 
         try {
           localStorage.removeItem(planKey(activeThread.value));
@@ -475,6 +719,8 @@ async function sendMessage() {
   error.value = "";
   status.value = "正在准备…";
   clearPlan();
+  clearTrace(activeThread.value);
+  clearCancelNotice(activeThread.value);
 
   messages.value.push({
     role: "user",
@@ -490,7 +736,7 @@ async function sendMessage() {
   messages.value.push(assistant);
   currentAssistant = assistant;
   streaming.value = true;
-  scrollToBottom();
+  scrollToBottom(true);
 
   await streamRequest(
     "/api/chat/stream",
@@ -578,8 +824,51 @@ function stopStreaming() {
     controller.abort();
   }
 
+  if (currentAssistant) {
+    const notice = "已停止生成，你可以修改需求后重新发送。";
+
+    currentAssistant.content = currentAssistant.content
+      ? `${currentAssistant.content}\n\n${notice}`
+      : notice;
+    saveCancelNotice(activeThread.value, currentAssistant.content);
+    currentAssistant = null;
+  }
+
+  if (currentPlan.value) {
+    currentPlan.value = {
+      ...currentPlan.value,
+      tasks: (currentPlan.value.tasks || []).map((task) => {
+        if (task.status !== "in_progress") {
+          return task;
+        }
+
+        const trace = traces.value[task.task_id] || {};
+
+        traces.value = {
+          ...traces.value,
+          [task.task_id]: {
+            ...trace,
+            task_id: task.task_id,
+            agent: task.agent,
+            phase: "failed",
+            error: "用户已停止生成",
+          },
+        };
+
+        return {
+          ...task,
+          status: "failed",
+        };
+      }),
+    };
+
+    savePlan(activeThread.value, currentPlan.value);
+    saveTrace(activeThread.value, traces.value);
+  }
+
   streaming.value = false;
   status.value = "";
+  scrollToBottom(true);
 }
 
 async function loadProfile({ quiet = false } = {}) {
@@ -603,6 +892,7 @@ async function loadProfile({ quiet = false } = {}) {
 }
 
 async function openProfile() {
+  userMenuOpen.value = false;
   profileOpen.value = true;
   await loadProfile();
 }
@@ -659,6 +949,17 @@ async function saveProfile() {
   }
 }
 
+function logout() {
+  userMenuOpen.value = false;
+
+  if (streaming.value) {
+    stopStreaming();
+  }
+
+  newChat();
+  profileOpen.value = false;
+}
+
 function pickSuggestion(text) {
   input.value = text;
 }
@@ -666,10 +967,15 @@ function pickSuggestion(text) {
 onMounted(() => {
   refreshThreads();
   loadProfile({ quiet: true });
+  document.addEventListener("click", closeThreadMenu);
 
   window.addEventListener("focus", () => {
     loadProfile({ quiet: true });
   });
+});
+
+onUnmounted(() => {
+  document.removeEventListener("click", closeThreadMenu);
 });
 </script>
 
@@ -677,8 +983,8 @@ onMounted(() => {
   <div
     class="app-shell"
     :class="{
-      'with-plan': currentPlan,
-      'plan-collapsed': currentPlan && planCollapsed,
+      'with-plan': hasPlanTasks,
+      'plan-collapsed': hasPlanTasks && planCollapsed,
     }"
   >
     <aside class="sidebar">
@@ -700,7 +1006,10 @@ onMounted(() => {
           v-for="thread in threads"
           :key="thread.thread_id"
           class="thread-item"
-          :class="{ active: thread.thread_id === activeThread }"
+          :class="{
+            active: thread.thread_id === activeThread,
+            'menu-open': threadMenuId === thread.thread_id,
+          }"
           role="button"
           tabindex="0"
           @click="openThread(thread.thread_id)"
@@ -717,32 +1026,50 @@ onMounted(() => {
 
           <div class="thread-actions">
             <button
-              class="icon-btn"
-              title="重命名"
-              aria-label="重命名会话"
-              @click.stop="renameThread(thread)"
+              class="thread-menu-btn"
+              title="会话操作"
+              aria-label="会话操作"
+              :aria-expanded="threadMenuId === thread.thread_id"
+              @click.stop="toggleThreadMenu(thread.thread_id)"
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  d="M4 20h4.2L19.4 8.8a2.1 2.1 0 0 0 0-3L18.2 4.6a2.1 2.1 0 0 0-3 0L4 15.8V20Z"
-                />
-                <path d="m13.9 6.1 4 4" />
+                <circle cx="5" cy="12" r="1.6" />
+                <circle cx="12" cy="12" r="1.6" />
+                <circle cx="19" cy="12" r="1.6" />
               </svg>
             </button>
 
-            <button
-              class="icon-btn danger"
-              title="删除"
-              aria-label="删除会话"
-              @click.stop="deleteThread(thread)"
+            <div
+              v-if="threadMenuId === thread.thread_id"
+              class="thread-menu"
+              @click.stop
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M4 7h16" />
-                <path d="M9 7V4h6v3" />
-                <path d="M7 7l1 13h8l1-13" />
-                <path d="M10 11v5M14 11v5" />
-              </svg>
-            </button>
+              <button
+                class="thread-menu-item"
+                @click.stop="renameThread(thread)"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M4 20h4.2L19.4 8.8a2.1 2.1 0 0 0 0-3L18.2 4.6a2.1 2.1 0 0 0-3 0L4 15.8V20Z"
+                  />
+                  <path d="m13.9 6.1 4 4" />
+                </svg>
+                <span>重命名</span>
+              </button>
+
+              <button
+                class="thread-menu-item danger"
+                @click.stop="deleteThread(thread)"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 7h16" />
+                  <path d="M9 7V4h6v3" />
+                  <path d="M7 7l1 13h8l1-13" />
+                  <path d="M10 11v5M14 11v5" />
+                </svg>
+                <span>删除</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -751,14 +1078,47 @@ onMounted(() => {
         </div>
       </div>
 
-      <button class="profile-entry" @click="openProfile">
-        <div class="avatar">我</div>
-        <div>
-          <strong>我的偏好</strong>
-          <span>让推荐更懂你</span>
+      <div class="user-area">
+        <button
+          class="profile-entry"
+          :aria-expanded="userMenuOpen"
+          @click.stop="toggleUserMenu"
+        >
+          <div class="avatar">我</div>
+          <div class="user-copy">
+            <strong>{{ USER_ID }}</strong>
+            <span>本地测试账号</span>
+          </div>
+          <span class="chevron">›</span>
+        </button>
+
+        <div
+          v-if="userMenuOpen"
+          class="user-menu"
+          @click.stop
+        >
+          <button class="user-menu-item" @click="openProfile">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 7h16M4 12h16M4 17h16" />
+              <circle cx="9" cy="7" r="2" />
+              <circle cx="15" cy="12" r="2" />
+              <circle cx="8" cy="17" r="2" />
+            </svg>
+            <span>设置</span>
+          </button>
+
+          <button
+            class="user-menu-item danger"
+            @click="logout"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4" />
+              <path d="M15 8l4 4-4 4M19 12H9" />
+            </svg>
+            <span>退出登录</span>
+          </button>
         </div>
-        <span class="chevron">›</span>
-      </button>
+      </div>
     </aside>
 
     <main class="chat-panel">
@@ -772,17 +1132,20 @@ onMounted(() => {
 
         <div class="header-actions">
           <button
-            v-if="currentPlan"
+            v-if="hasPlanTasks"
             class="plan-pill"
             @click="togglePlanDrawer"
           >
             行程计划
           </button>
-          <span class="user-chip">{{ USER_ID }}</span>
         </div>
       </header>
 
-      <section ref="messagesEl" class="messages">
+      <section
+        ref="messagesEl"
+        class="messages"
+        @scroll.passive="onMessagesScroll"
+      >
         <div v-if="empty" class="welcome">
           <div class="welcome-mark">📍</div>
           <h2>下一站，去哪里？</h2>
@@ -845,54 +1208,118 @@ onMounted(() => {
 
       </section>
 
+      <button
+        v-if="showJump && !interrupt"
+        class="jump-bottom"
+        aria-label="回到最新"
+        data-tooltip="回到最新"
+        @click="jumpToBottom"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 5v14" />
+          <path d="m5.5 12.5 6.5 6.5 6.5-6.5" />
+        </svg>
+      </button>
+
       <div v-if="error" class="error-bar">
         {{ error }}
         <button @click="error = ''">×</button>
       </div>
 
       <footer class="composer">
-        <div class="composer-box">
-          <textarea
-            ref="inputEl"
-            v-model="input"
-            rows="1"
-            placeholder="想去哪儿？想吃什么？告诉我你的计划…"
-            @input="resizeInput"
-            @keydown.enter.exact.prevent="sendMessage"
-          ></textarea>
+        <div v-if="interrupt" class="interrupt-inline">
+          <div class="interrupt-inline-head">
+            <span class="eyebrow">需要你补充一点信息</span>
+            <strong>再确认一下，行程会更准</strong>
+          </div>
 
-          <button
-            v-if="streaming"
-            class="stop-btn"
-            @click="stopStreaming"
-          >
-            停止
-          </button>
+          <div class="question-list">
+            <label
+              v-for="(item, index) in interrupt.questions || []"
+              :key="item.field || index"
+              class="question"
+            >
+              <span>{{ item.question || item.field }}</span>
+              <input
+                v-model="interruptAnswers[item.field]"
+                placeholder="请输入补充信息"
+              />
+              <small
+                v-if="item.reason"
+                class="question-reason"
+              >
+                {{ item.reason }}
+              </small>
+            </label>
+          </div>
 
-          <button
-            v-else
-            class="send-btn"
-            :disabled="!input.trim()"
-            @click="sendMessage"
-          >
-            发送
-          </button>
+          <div class="interrupt-inline-actions">
+            <button class="ghost-btn" @click="cancelInterrupt">
+              取消任务
+            </button>
+            <button
+              class="primary-btn"
+              :disabled="!canSubmitInterrupt"
+              @click="submitInterrupt"
+            >
+              提交并继续
+            </button>
+          </div>
         </div>
 
-        <p class="composer-hint">
-          Enter 发送 · Shift + Enter 换行 · AI 可能会犯错，请核对关键信息
-        </p>
+        <template v-else>
+          <div class="composer-box">
+            <textarea
+              ref="inputEl"
+              v-model="input"
+              rows="1"
+              placeholder="想去哪儿？想吃什么？告诉我你的计划…"
+              @input="resizeInput"
+              @keydown.enter.exact.prevent="sendMessage"
+            ></textarea>
+
+            <button
+              v-if="streaming"
+              class="stop-btn"
+              aria-label="停止生成"
+              title="停止生成"
+              @click="stopStreaming"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="7" y="7" width="10" height="10" rx="2" />
+              </svg>
+            </button>
+
+            <button
+              v-else
+              class="send-btn"
+              aria-label="发送"
+              title="发送"
+              :disabled="!input.trim()"
+              @click="sendMessage"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 19V5" />
+                <path d="m5.5 11.5 6.5-6.5 6.5 6.5" />
+              </svg>
+            </button>
+          </div>
+
+          <p class="composer-hint">
+            Enter 发送 · Shift + Enter 换行 · AI 可能会犯错，请核对关键信息
+          </p>
+        </template>
       </footer>
     </main>
 
     <div
-      v-if="currentPlan && planDrawerOpen"
+      v-if="hasPlanTasks && planDrawerOpen"
       class="plan-drawer-mask"
       @click="planDrawerOpen = false"
     ></div>
 
     <aside
-      v-if="currentPlan"
+      v-if="hasPlanTasks"
       class="plan-sidebar"
       :class="{
         collapsed: planCollapsed,
@@ -922,10 +1349,22 @@ onMounted(() => {
 
       <div v-if="!planCollapsed" class="plan-sidebar-body">
         <div class="plan-sidebar-head">
-          <span class="eyebrow">
-            {{ (currentPlan.tasks || []).length ? "本次行程规划" : "规划前确认" }}
-          </span>
           <h2>{{ currentPlan.goal }}</h2>
+        </div>
+
+        <div
+          v-if="(currentPlan.tasks || []).length"
+          class="plan-summary"
+        >
+          <span>
+            <b>{{ planStats.success }}</b>/{{ planStats.total }} 完成
+          </span>
+          <span v-if="planStats.running" class="running">
+            {{ planStats.running }} 执行中
+          </span>
+          <span v-if="planStats.failed" class="failed">
+            {{ planStats.failed }} 失败
+          </span>
         </div>
 
         <div class="plan-tasks">
@@ -933,11 +1372,48 @@ onMounted(() => {
             v-for="task in currentPlan.tasks || []"
             :key="task.task_id"
             class="plan-task"
+            :class="`is-${taskState(task)}`"
           >
-            <span class="plan-index">{{ task.task_id }}</span>
+            <span
+              class="plan-index"
+              :class="taskState(task)"
+            ></span>
+
             <div class="plan-task-body">
-              <p>{{ task.content }}</p>
-              <span class="plan-agent">{{ task.agent }}</span>
+              <p class="plan-task-title">{{ task.content }}</p>
+
+              <div class="plan-task-meta">
+                <span class="plan-agent">
+                  {{ task.agent }}
+                </span>
+
+                <span class="plan-meta-right">
+                  <em
+                    v-if="traces[task.task_id]?.duration_ms != null"
+                    class="plan-duration"
+                  >
+                    {{ formatDuration(traces[task.task_id].duration_ms) }}
+                  </em>
+
+                  <span
+                    class="plan-status"
+                    :class="taskState(task)"
+                  >
+                    {{ taskStateLabel(taskState(task)) }}
+                  </span>
+                </span>
+              </div>
+
+              <details
+                v-if="
+                  taskState(task) === 'failed'
+                    && traces[task.task_id]?.error
+                "
+                class="plan-error"
+              >
+                <summary>失败原因</summary>
+                <p>{{ traces[task.task_id].error }}</p>
+              </details>
             </div>
           </div>
         </div>
@@ -1019,14 +1495,21 @@ onMounted(() => {
     </div>
 
     <div v-if="profileOpen" class="modal-mask" @click.self="profileOpen = false">
-      <section class="modal profile-modal">
-        <div class="modal-head">
-          <div>
-            <h2>我的旅行偏好</h2>
-            <p>保存后，规划、餐厅和路线都会参考这些偏好。</p>
-          </div>
-          <button class="close-btn" @click="profileOpen = false">×</button>
-        </div>
+      <section class="modal profile-modal settings-modal">
+        <div class="settings-layout">
+          <aside class="settings-nav">
+            <strong>设置</strong>
+            <button class="settings-nav-item active">偏好设置</button>
+          </aside>
+
+          <div class="settings-content">
+            <div class="modal-head">
+              <div>
+                <h2>偏好设置</h2>
+                <p>保存后，规划、餐厅和路线都会参考这些偏好。</p>
+              </div>
+              <button class="close-btn" @click="profileOpen = false">×</button>
+            </div>
 
         <div class="form-grid">
           <label>
@@ -1060,61 +1543,16 @@ onMounted(() => {
           </label>
         </div>
 
-        <div class="modal-actions">
-          <button class="ghost-btn" @click="profileOpen = false">取消</button>
-          <button class="primary-btn" :disabled="profileSaving" @click="saveProfile">
-            {{ profileSaving ? "保存中…" : "保存偏好" }}
-          </button>
-        </div>
-      </section>
-    </div>
-
-    <div v-if="interrupt" class="modal-mask">
-      <section class="modal interrupt-modal">
-        <div class="modal-head">
-          <div>
-            <span class="eyebrow">需要你补充一点信息</span>
-            <h2>再确认一下，行程会更准</h2>
+            <div class="modal-actions">
+              <button class="ghost-btn" @click="profileOpen = false">取消</button>
+              <button class="primary-btn" :disabled="profileSaving" @click="saveProfile">
+                {{ profileSaving ? "保存中…" : "保存偏好" }}
+              </button>
+            </div>
           </div>
         </div>
-
-        <div class="question-list">
-          <label
-            v-for="(item, index) in interrupt.questions || []"
-            :key="item.field || index"
-            class="question"
-          >
-            <span>{{ item.question || item.field }}</span>
-            <input
-              v-model="interruptAnswers[item.field]"
-              placeholder="请输入补充信息"
-            />
-            <small
-              v-if="item.reason"
-              class="question-reason"
-            >
-              {{ item.reason }}
-            </small>
-          </label>
-
-          <p v-if="!(interrupt.questions || []).length" class="muted">
-            {{ interrupt.message || "继续执行需要补充信息。" }}
-          </p>
-        </div>
-
-        <div class="modal-actions">
-          <button class="ghost-btn" @click="cancelInterrupt">
-            取消任务
-          </button>
-          <button
-            class="primary-btn"
-            :disabled="!canSubmitInterrupt"
-            @click="submitInterrupt"
-          >
-            提交并继续
-          </button>
-        </div>
       </section>
     </div>
+
   </div>
 </template>

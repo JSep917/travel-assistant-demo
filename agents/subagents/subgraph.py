@@ -4,8 +4,7 @@ from jsonschema import validate
 from pydantic import ValidationError
 from langchain_core.messages import (
     SystemMessage,
-    ToolMessage,
-    HumanMessage
+    HumanMessage,
 )
 from langgraph.graph import StateGraph
 from langgraph.types import Command
@@ -15,23 +14,8 @@ from common.call_with_retry import call_with_retry
 from services.redis.tool_cache import get_tool_cache
 import json
 
-def _tool_message(
-    ok: bool,
-    name: str,
-    call_id: str,
-    content: str,
-    retryable: bool = False,
-) -> ToolMessage:
-    return ToolMessage(
-        content=json.dumps({
-            "ok" : ok,
-            "retryable": retryable,
-            "content": json.loads(content)
-        }, ensure_ascii=False),
-        name=name,
-        tool_call_id=call_id,
-        additional_kwargs={"retryable": retryable}
-    )
+from common.graph_utils import build_tool_message
+
 
 def build_agent_subgraph(llm, state, tools: list, system_prompt: str) -> StateGraph:
     """子图工厂：agent -> execute -> agent，结束后 extract。"""
@@ -53,7 +37,7 @@ def build_agent_subgraph(llm, state, tools: list, system_prompt: str) -> StateGr
 
             if tool is None:
                 failed.append(
-                    _tool_message(
+                    build_tool_message(
                         ok=False,
                         name=name,
                         call_id=call_id,
@@ -89,8 +73,7 @@ def build_agent_subgraph(llm, state, tools: list, system_prompt: str) -> StateGr
                             content=result,
                             ttl=3600
                         )
-                except json.JSONDecodeError as e:
-                    print(f"业务失败: {e}")
+                except json.JSONDecodeError:
                     pass
 
                 if tool_cache:
@@ -98,7 +81,7 @@ def build_agent_subgraph(llm, state, tools: list, system_prompt: str) -> StateGr
 
             except ValidationError as e:
                 failed.append(
-                    _tool_message(
+                    build_tool_message(
                         ok=False,
                         name=name,
                         call_id=call_id,
@@ -109,7 +92,7 @@ def build_agent_subgraph(llm, state, tools: list, system_prompt: str) -> StateGr
                 continue
             except Exception as e:
                 failed.append(
-                    _tool_message(
+                    build_tool_message(
                         ok=False,
                         name=name,
                         call_id=call_id,
@@ -120,7 +103,7 @@ def build_agent_subgraph(llm, state, tools: list, system_prompt: str) -> StateGr
                 continue
 
             success.append(
-                _tool_message(
+                build_tool_message(
                     ok=True,
                     name=name,
                     call_id=call_id,

@@ -11,7 +11,6 @@ from langchain_core.messages import (
 )
 from langgraph.types import Command
 
-from agents.context.extract_memory_card import write_in
 from agents.context.extract_user_profile import update_profile
 from services.db.thread_repository import ThreadRepository
 from services.db.user_pofile_repository import UserProfileRepository
@@ -246,16 +245,6 @@ class ChatService:
             )
         except Exception as e:
             print(f"更新会话预览失败: {e}")
-
-        if result.question and result.answer:
-            # 一轮对话后写入记忆库
-            self._spawn(
-                write_in(
-                    thread_id=result.thread_id,
-                    user_id=result.user_id,
-                    truns=[(result.question, result.answer)],
-                )
-            )
 
         buffer = list(result.buffer or [])
 

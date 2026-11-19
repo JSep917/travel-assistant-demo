@@ -13,9 +13,8 @@ class MainGraph(TypedDict):
     clarify_question: list | None
     results: dict[str, dict] | None
     buffer: list[dict] | None
-    need_memory: bool | None
-    context: list[BaseMessage] | None
-    next_node: str | None
+    summary: str | None
+    summarized_turns: int | None
 
 
 class GeoAgent(TypedDict):

@@ -10,126 +10,84 @@ from langgraph.types import Command, interrupt
 from agents.prompts.loader import load_prompt
 from agents.subagents.subgraph import build_agent_subgraph
 from common.amap_tools import AMAP_TOOLS
-from common.model import get_llm, get_embeddings
+from common.model import get_llm
 from common.pydantic_model import (
     DispatchDecision,
-    RouteDecision,
     TaskPlan,
     TaskResult,
 )
 from common.call_with_retry import call_with_retry
 from common.state import GeoAgent, MainGraph, PoiAgent, RouteAgent
 from services.mcp.amap_service import get_amap_tools
-from agents.context.store import get_memory_store
-from agents.context.rerank import rerank_memories, filter_by_relative_score
 import time
 
-def _completed_ids(planning: dict) -> set[str]:
-    """完成的任务 ID"""
-    return {
-        task['task_id']
-        for task in planning.get('tasks', [])
-        if task.get('status') == "completed"
-    }
+from common.graph_utils import (
+    KEEP_RECENT_TURNS,
+    SUMMARY_BATCH_TURNS,
+    compact_messages,
+    flatten_turns,
+    format_history,
+    latest_human_message,
+    mark_task_status,
+    messages_after_turns,
+    ready_tasks,
+    split_turns,
+)
 
-def _ready_task(planning: dict) -> list[dict]:
-    """可执行任务"""
-    return [
-        task
-        for task in planning['tasks']
-        if task['status'] == "pending"
-        and all(
-            dep in _completed_ids(planning)
-            for dep in task["depends_on"]
-        )
-    ]
-
-def _mark_status(planning: dict, task_id: str, status: str) -> dict:
-    """更新任务状态"""
-    return {
-        **planning,
-        "tasks": [
-            {**task, "status": status}
-            if task['task_id'] == task_id
-            else task
-            for task in planning.get('tasks', [])
-        ],
-    }
-
-def _compact(messages: list, max_turns: int = 10) -> list:
-    """只保留最近 N 轮。"""
-    turns = []
-
-    for message in messages:
-        if isinstance(message, HumanMessage):
-            turns.append([])
-
-        if turns:
-            turns[-1].append(message)
-
-    return [
-        message
-        for turn in turns[-max_turns:]
-        for message in turn
-    ]
-
-def _human_message(messages: list) -> HumanMessage | None:
-    """获取最近一条用户消息"""
-    for message in reversed(messages):
-        if isinstance(message, HumanMessage):
-            return message
-
-    return None
 
 async def build_main_graph(checkpointer):
     """主图工厂"""
-    def make_router(llm):
-        async def router_node(state: MainGraph, config: RunnableConfig) -> Command[Literal['recall']]:
-            """前置路由节点"""
+    def make_summary(llm):
+        async def summary_node(state: MainGraph) -> Command[Literal['planning']]:
+            """按轮数滚动压缩较早对话。"""
             writer = get_stream_writer()
+            turns = split_turns(state.get("messages") or [])
+            done = state.get("summarized_turns") or 0
 
-            llm_with_schema = llm.with_structured_output(
-                schema=RouteDecision,
-                method="json_mode",
-            )
-            profile = config['configurable']['user_profile']
-            messages = [
-                SystemMessage(content=(
-                    load_prompt("router")
-                    + "\n\n用户当前偏好:\n"
-                    + json.dumps(profile, ensure_ascii=False, default=str)
-                )),
-                *_compact(state['messages']),
-            ]
-            try:
-                decision: RouteDecision = await call_with_retry(lambda: llm_with_schema.ainvoke(messages))
-                next_node = decision.next_node
-                need_memory = decision.need_memory
-            except Exception:
-                next_node = "planning"
-                need_memory = False
+            if len(turns) < done + KEEP_RECENT_TURNS + SUMMARY_BATCH_TURNS:
+                return Command(goto="planning")
+
+            cutoff = len(turns) - KEEP_RECENT_TURNS
+            old_messages = flatten_turns(turns[done:cutoff])
+
+            if not old_messages:
+                return Command(goto="planning")
 
             writer({
-                "event": "router",
-                "message": (
-                    "直接回答..."
-                    if next_node == "answer"
-                    else "任务规划..."
-                ),
+                "event": "summary",
+                "message": "正在压缩较早的对话...",
             })
 
-            print(f"下一节点: {next_node}")
-            print(f"是否需要检索记忆: {need_memory}")
+            messages = [
+                SystemMessage(content=(
+                    load_prompt("summary")
+                    + "\n\n已有摘要:\n"
+                    + (state.get("summary") or "无")
+                )),
+                HumanMessage(content=format_history(old_messages)),
+            ]
+
+            try:
+                response = await call_with_retry(lambda: llm.ainvoke(messages))
+                new_summary = response.content
+            except Exception:
+                return Command(goto="planning")
+
+            if not new_summary:
+                return Command(goto="planning")
+
+            print(f"摘要: {new_summary}")
 
             return Command(
                 update={
-                    "next_node": next_node,
-                    "need_memory": need_memory,
+                    "summary": new_summary,
+                    "summarized_turns": cutoff,
                 },
-                goto="recall"
+                goto="planning",
             )
 
-        return router_node
+        return summary_node
+
 
     def make_planning(llm):
         async def planning_node(state: MainGraph, config: RunnableConfig) -> Command[Literal['supervisor', 'clarify']]:
@@ -140,11 +98,6 @@ async def build_main_graph(checkpointer):
                 "message": "正在分析任务并制定计划...",
             })
 
-            context = (
-                state.get('context') or []
-                if state.get('need_memory')
-                else []
-            )
             extra = (
                 [
                     HumanMessage(content=(
@@ -157,15 +110,21 @@ async def build_main_graph(checkpointer):
                 if state.get('clarify_answers')
                 else []
             )
+
             profile = config['configurable']['user_profile']
+            summary = state.get("summary") or ""
+            recent_messages = messages_after_turns(
+                state.get("messages") or [],
+                state.get("summarized_turns") or 0,
+            )
+
             messages = [
                 SystemMessage(content=(
                     load_prompt("planning")
-                    + f"用户当前偏好:\n"
-                    + json.dumps(profile, ensure_ascii=False)
+                    + f"用户当前偏好: {json.dumps(profile, ensure_ascii=False)}\n"
+                    + (f"历史摘要: {summary}\n" if summary else "无")
                 )),
-                *_compact(state['messages']),
-                *context,
+                *compact_messages(recent_messages, max_turns=KEEP_RECENT_TURNS),
                 *extra,
             ]
             llm_with_schema = llm.with_structured_output(
@@ -174,10 +133,9 @@ async def build_main_graph(checkpointer):
             )
             try:
                 response: TaskPlan = await call_with_retry(lambda: llm_with_schema.ainvoke(messages))
-            except Exception as e:
-                print(f"规划失败: {e}")
+            except Exception:
                 return Command(
-                    update={"messages": [AIMessage(content="规划失败，请稍后重试...")]},
+                    update={"messages": [AIMessage(content="制定计划失败，请稍后重试...")]},
                     goto="__end__"
                 )
 
@@ -190,7 +148,6 @@ async def build_main_graph(checkpointer):
 
             return Command(
                 update={
-                    "need_memory": None,
                     "planning": response.model_dump(),
                     "clarify_question": clarify_question or None,
                     "clarify_answers": state.get('clarify_answers') if clarify_question else None,
@@ -242,21 +199,16 @@ async def build_main_graph(checkpointer):
             state: MainGraph
         ) -> Command[Literal['planning', 'geo_agent', 'poi_agent', 'route_agent', 'respond']]:
             """主管派发任务节点"""
-            writer = get_stream_writer()
             planning = state.get("planning") or {}
 
             if not planning:
                 return Command(goto="planning")
 
-            ready = _ready_task(planning)
+            ready = ready_tasks(planning)
 
             print(f"可执行任务: {json.dumps(ready, ensure_ascii=False, indent=2)}\n")
 
             if not ready:
-                writer({
-                    "event": "supervisor",
-                    "message": "任务完成...",
-                })
                 return Command(goto="respond")
 
             if len(ready) == 1:
@@ -280,18 +232,11 @@ async def build_main_graph(checkpointer):
                 )
                 try:
                     response: DispatchDecision = await call_with_retry(lambda: llm_with_schema.ainvoke(messages))
-                except Exception as e:
-                    print(f"派发失败: {e}")
+                except Exception:
                     response = DispatchDecision(
                         task_id=ready[0]['task_id'],
                         reason="派发失败",
                     )
-                    writer({
-                        "event": "supervisor",
-                        "message": (
-                            f"派发失败，默认执行 {ready[0]['task_id']}"
-                        ),
-                    })
 
                 task = next(
                     (
@@ -305,28 +250,15 @@ async def build_main_graph(checkpointer):
                 if task is None:
                     # 无效任务 ID
                     task = {**ready[0], "status": "in_progress"}
-                    writer({
-                        "event": "supervisor",
-                        "message": (
-                            f"未选出有效任务，默认执行 {task['task_id']}"
-                        ),
-                    })
 
             # 更新状态
-            planning = _mark_status(
+            planning = mark_task_status(
                 planning=planning,
                 task_id=task['task_id'],
                 status="in_progress",
             )
 
             print(f"任务状态: {json.dumps(planning, ensure_ascii=False, indent=2)}\n")
-
-            writer({
-                "event": "supervisor",
-                "agent": task['agent'],
-                "task_id": task['task_id'],
-                "message": f"委派给 {task['agent']}：{task['content']}",
-            })
 
             return Command(
                 update={
@@ -358,14 +290,22 @@ async def build_main_graph(checkpointer):
                 f"任务 ID: {task['task_id']}\n"
                 f"任务目标: {task['content']}\n"
                 f"依赖任务: {json.dumps(task['depends_on'], ensure_ascii=False)}\n"
-                f"依赖任务结果: {json.dumps(dependency_results, ensure_ascii=False, default=str)}\n"
-                f"用户当前偏好: {json.dumps(profile, ensure_ascii=False, default=str)}"
+                f"依赖任务结果: {json.dumps(dependency_results, ensure_ascii=False)}\n"
+                f"用户当前偏好: {json.dumps(profile, ensure_ascii=False)}"
             )
+
+            trace_base = {
+                "event": "trace",
+                "task_id": task["task_id"],
+                "agent": name,
+            }
 
             writer({
                 "event": "subagent",
                 "message": f"{name} 正在执行...",
             })
+            writer({**trace_base, "phase": "start"})
+
             start = time.perf_counter()
             try:
                 response = await graph.ainvoke({
@@ -376,6 +316,13 @@ async def build_main_graph(checkpointer):
 
             except Exception as e:
                 # 校验失败 / 执行失败
+                elapsed_ms = (time.perf_counter() - start) * 1000
+                writer({
+                    **trace_base,
+                    "phase": "failed",
+                    "duration_ms": round(elapsed_ms),
+                    "error": str(e),
+                })
                 return Command(
                     update={
                         "messages": [
@@ -385,7 +332,7 @@ async def build_main_graph(checkpointer):
                             )
                         ],
                         "current_task": None,
-                        "planning": _mark_status(
+                        "planning": mark_task_status(
                             planning=state["planning"],
                             task_id=task["task_id"],
                             status="failed",
@@ -403,13 +350,16 @@ async def build_main_graph(checkpointer):
                     },
                     goto="supervisor",
                 )
-            finally:
-                elapsed_ms = (time.perf_counter() - start) * 1000
-                writer({
-                    "event": "subagent",
-                    "message": f"task_{task['task_id']} 完成 耗时: {round(elapsed_ms, 2)}ms"
 
-                })
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            writer({
+                **trace_base,
+                "phase": "success"
+                if task_result.get("status") == "success"
+                else "failed",
+                "duration_ms": round(elapsed_ms),
+                "error": task_result.get("error"),
+            })
 
             return Command(
                 update={
@@ -420,7 +370,7 @@ async def build_main_graph(checkpointer):
                         )
                     ],
                     "current_task": None,
-                    "planning": _mark_status(
+                    "planning": mark_task_status(
                         planning=state.get('planning'),
                         task_id=task["task_id"],
                         status="completed"
@@ -437,45 +387,6 @@ async def build_main_graph(checkpointer):
 
         return subagent
 
-    def make_answer(llm):
-        async def answer_node(state: MainGraph, config: RunnableConfig) -> Command[Literal['__end__']]:
-            """简单回答"""
-            writer = get_stream_writer()
-            writer({
-                "event": "answer",
-                "message": "正在回答...",
-            })
-
-            context = (
-                state.get('context') or []
-                if state.get('need_memory')
-                else []
-            )
-            profile = config['configurable']['user_profile']
-            messages = [
-                SystemMessage(content=(
-                    load_prompt("answer")
-                    + f"用户当前偏好:\n"
-                    + json.dumps(profile, ensure_ascii=False, default=str)
-                )),
-                *_compact(state['messages']),
-                *context,
-            ]
-            try:
-                response = await call_with_retry(lambda: llm.ainvoke(messages))
-            except Exception:
-                response = AIMessage(content="整理回答失败，请稍后重试...")
-
-            return Command(
-                update={
-                    "messages": [response],
-                    "need_memory": None,
-                },
-                goto="__end__"
-            )
-
-        return answer_node
-
     def make_respond(llm):
         async def respond_node(state: MainGraph, config: RunnableConfig) -> Command[Literal['__end__']]:
             """汇总节点"""
@@ -485,19 +396,26 @@ async def build_main_graph(checkpointer):
                 "message": "正在整理最终回答...",
             })
 
-            question = _human_message(state['messages'])
+            question = latest_human_message(state['messages'])
             planning = state.get('planning') or []
             results = state.get('results') or {}
             profile = config['configurable']['user_profile']
+            summary = state.get("summary") or ""
+            recent_messages = messages_after_turns(
+                state.get("messages") or [],
+                state.get("summarized_turns") or 0,
+            )
 
             messages = [
-                SystemMessage(content=load_prompt("respond")),
-                HumanMessage(content=(
-                    f"用户问题: {question}\n"
-                    f"用户偏好: {json.dumps(profile, ensure_ascii=False, default=str)}\n"
-                    f"任务计划: {json.dumps(planning, ensure_ascii=False, default=str)}\n"
-                    f"子任务结果: {json.dumps(results, ensure_ascii=False, default=str)}"
-                ))
+                SystemMessage(content=(
+                    load_prompt("respond")
+                    + f"\n用户问题: {question}\n"
+                    + f"用户偏好: {json.dumps(profile, ensure_ascii=False)}\n"
+                    + (f"历史摘要: {summary}\n" if summary else "无")
+                    + f"任务计划: {json.dumps(planning, ensure_ascii=False)}\n"
+                    + f"子任务结果: {json.dumps(results, ensure_ascii=False)}"
+                )),
+                *compact_messages(recent_messages, max_turns=KEEP_RECENT_TURNS),
             ]
             try:
                 response = await call_with_retry(lambda: llm.ainvoke(messages))
@@ -520,95 +438,13 @@ async def build_main_graph(checkpointer):
         return respond_node
 
 
-    def make_recall(llm):
-        async def recall_node(state: MainGraph, config: RunnableConfig) -> Command[Literal['answer', 'planning']]:
-            """召回记忆节点"""
-            store = get_memory_store()
-            writer = get_stream_writer()
-
-            next_node = state.get('next_node') or "planning"
-
-            if not state.get('need_memory'):
-                return Command(
-                    update={"next_node": None},
-                    goto=next_node
-                )
-
-            writer({
-                "event": "recall",
-                "message": "正在寻找相关记忆..."
-            })
-            messages = [
-                SystemMessage(content=(
-                    f"""
-                    把用户问题改写成独立、适合检索的查询。
-                    规则：
-                    - 不要编造对话里没有的信息
-                    - 无法补全时保留原问题
-                    - 只输出改写后的查询，不要解释
-                    
-                    用户问题: {_human_message(state['messages']).content}
-                    """
-                )),
-            ]
-            try:
-                response = await call_with_retry(lambda: llm.ainvoke(messages))
-                query = response.content
-            except Exception as e:
-                print(f"改写失败: {e}")
-                query = _human_message(state['messages']).content
-
-            query_vector = await get_embeddings().aembed_query(query)
-
-            # 混合检索
-            memories = store.search(
-                query=query.strip(),
-                query_vector=query_vector,
-                user_id=config['configurable']['user_id'],
-                top_k=10
-            )
-            # Rerank精排
-            memories = rerank_memories(
-                query=query.strip(),
-                memories=memories,
-                top_n=5,
-            )
-            # 阈值过滤
-            memories = filter_by_relative_score(
-                items=memories,
-                ratio=0.6,
-                min_score=0.2,
-                limit=3
-            )
-
-            context = [
-                SystemMessage(
-                    content=f"记忆 {i + 1}:\n{memory['content']}"
-                )
-                for i, memory in enumerate(memories or [])
-                if memory.get("content")
-            ]
-
-            return Command(
-                update={
-                    "context": context,
-                    "next_node": None,
-                },
-                goto=next_node
-            )
-
-        return recall_node
-
-
     def graph(TOOLS, LLM) -> StateGraph:
         """构建图"""
         return (
             StateGraph(state_schema=MainGraph)
-            .add_node("router", make_router(llm=LLM))
-            .add_node("recall", make_recall(llm=LLM))
+            .add_node("summary", make_summary(llm=LLM))
             .add_node("planning", make_planning(llm=LLM))
             .add_node("clarify", clarify_node)
-            .add_node("answer", make_answer(llm=LLM))
             .add_node("supervisor", make_supervisor(llm=LLM))
             .add_node("respond", make_respond(llm=LLM))
             .add_node(
@@ -647,7 +483,8 @@ async def build_main_graph(checkpointer):
                     name="route_agent",
                 ),
             )
-            .add_edge("__start__", "router")
+            .add_edge("__start__", "summary")
+            .add_edge("summary", "planning")
             .compile(checkpointer=checkpointer)
         )
 

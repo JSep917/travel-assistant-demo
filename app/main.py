@@ -95,6 +95,16 @@ app.include_router(chat_router)
 app.include_router(threads_router)
 app.include_router(profile_router)
 
+
+@app.middleware("http")
+async def no_cache_frontend(request, call_next):
+    response = await call_next(request)
+
+    if request.url.path in ("/app", "/app/", "/app/index.html"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+
+    return response
+
 FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 
 if FRONTEND_DIST.exists():

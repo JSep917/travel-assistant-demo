@@ -1,6 +1,12 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 
 class TodoItem(BaseModel):
@@ -55,12 +61,24 @@ class TaskPlan(BaseModel):
         description="缺失的必要查询信息，向用户提问"
     )
 
-
-class RouteDecision(BaseModel):
-    next_node: Literal["answer", "planning"] = Field(
-        description="answer 直接回答，planning 进入任务规划",
+class RecallDecision(BaseModel):
+    need_recall: bool = Field(
+        default=False,
+        description="是否需要召回更早的历史记忆"
     )
-    need_memory: bool = Field(default=False, description="是否需要检索更早的对话记忆")
+    query: str = Field(
+        default="",
+        description="需要召回时的独立检索查询；不需要时为空字符串"
+    )
+
+    @model_validator(mode="after")
+    def check_query(self):
+        if not self.need_recall:
+            self.query = ""
+        elif not self.query.strip():
+            raise ValueError("need_recall=true 时 query 不能为空")
+        return self
+
 
 class DispatchDecision(BaseModel):
     task_id: str | None = Field(
